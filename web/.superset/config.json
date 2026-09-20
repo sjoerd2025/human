@@ -1,0 +1,4 @@
+{
+  "setup": ["./.superset/setup.sh"],
+  "run": [". ./.env && pnpm --filter @workspace/api-server run dev"]
+}
