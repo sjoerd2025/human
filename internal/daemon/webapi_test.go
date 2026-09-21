@@ -40,11 +40,16 @@ func startWebAPIServer(t *testing.T) (addr string, token string) {
 		conn, derr := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 		if derr == nil {
 			_ = conn.Close()
-			break
+			t.Cleanup(cancel)
+			return addr, srv.Token
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Cleanup(cancel)
+	// The probe expiring means the daemon never came up (or took the port
+	// from the closed probe listener and lost it): fail loudly instead of
+	// letting every dial in the test mis-report as a server defect.
+	cancel()
+	t.Fatalf("daemon did not accept connections on %s within 2s", addr)
 	return addr, srv.Token
 }
 

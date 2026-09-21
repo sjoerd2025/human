@@ -177,10 +177,14 @@ desktop-frontend-check: desktop-frontend
 web-install:
 	cd web && pnpm install
 
+# Same build shape as web-dist-check (BASE_PATH=/mocks/): the embed's
+# //go:embed expects assets under /mocks/, and a default-baked build copied
+# over would 404 its assets (and trip the guard). A hosted-preview variant,
+# if ever wanted, is a separate target — not a surprise re-shape of this one.
 web-build: web-install
-	cd web && pnpm --filter @workspace/mockup-sandbox build
+	cd web && BASE_PATH=/mocks/ PORT=5174 pnpm --filter @workspace/mockup-sandbox build
 
-web-typecheck:
+web-typecheck: web-install
 	cd web && pnpm run typecheck
 
 web-dist-check: web-install
