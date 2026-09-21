@@ -41,3 +41,9 @@ desktop/frontend/package.json.md5
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# graft's telemetry cache under the source tree — regenerable, never source.
+/internal/daemon/graft/
+
+# macOS Finder metadata — never meaningful in a repo.
+.DS_Store
