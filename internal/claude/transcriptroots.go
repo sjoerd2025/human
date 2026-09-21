@@ -50,8 +50,18 @@ func TranscriptRoots(projectDirs []string) []string {
 // be walked as a single non-directory entry and yield nothing.
 //
 // EvalSymlinks fails on a path that does not exist yet — a project whose
-// container has never run — so the absolute form is kept rather than dropping a
-// root that may fill in later.
+// container has never run. Keeping the absolute form there is not enough: on
+// darwin $TMPDIR (/var/folders/…) resolves to /private/var/folders/…, so an
+// existing root canonicalises to the /private form while the missing one stays
+// /var — the same directory under two names. dedupeRoots compares strings, so
+// a nested root in the unresolved form survived deduplication and its tree was
+// walked twice. The nearest existing ancestor is therefore resolved and the
+// missing tail rejoined. Components that do not exist carry no symlinks, so
+// the rejoined form is canonical for comparison — the one exception being a
+// dangling symlink component, which EvalSymlinks also rejects and which stays
+// unresolved here exactly as it did under the old absolute-form fallback
+// (everything above it still gets resolved). The resulting root is either
+// walkable or missing — the same contract as before.
 func resolveRoot(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -59,6 +69,24 @@ func resolveRoot(path string) string {
 	}
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		return resolved
+	}
+	vol := filepath.VolumeName(abs)
+	rest := strings.TrimPrefix(abs, vol)
+	missing := []string{}
+	for {
+		parent := filepath.Dir(rest)
+		if parent == rest {
+			break // reached the filesystem root: nothing resolvable remains
+		}
+		if resolved, err := filepath.EvalSymlinks(vol + parent); err == nil {
+			// rest itself is part of the missing tail (its parent is the
+			// resolved ancestor), so rejoin Base(rest) on top of what the
+			// earlier iterations collected.
+			tail := append([]string{filepath.Base(rest)}, missing...)
+			return filepath.Join(append([]string{resolved}, tail...)...)
+		}
+		missing = append([]string{filepath.Base(rest)}, missing...)
+		rest = parent
 	}
 	return abs
 }

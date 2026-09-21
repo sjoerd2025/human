@@ -70,6 +70,14 @@ func TestLocalTranscriptRoots_includesRegisteredProjects(t *testing.T) {
 
 	roots := localTranscriptRoots()
 
+	// Roots come back canonical (resolveRoot); the registered path here is
+	// not — on darwin t.TempDir hands out /var/folders/... while the root
+	// resolves to /private/var/folders/... . Compare canonically. This runs
+	// after the production calls above, which must see the raw path.
+	if rp, err := filepath.EvalSymlinks(p); err == nil {
+		p = rp
+	}
+
 	var found bool
 	for _, r := range roots {
 		if strings.HasPrefix(r, p) {
