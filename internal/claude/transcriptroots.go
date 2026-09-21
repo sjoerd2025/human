@@ -56,9 +56,12 @@ func TranscriptRoots(projectDirs []string) []string {
 // /var — the same directory under two names. dedupeRoots compares strings, so
 // a nested root in the unresolved form survived deduplication and its tree was
 // walked twice. The nearest existing ancestor is therefore resolved and the
-// missing tail rejoined: the tail cannot contain symlinks (it does not exist),
-// so the rejoined form is canonical for comparison, and the resulting root is
-// either walkable or missing — the same contract as before.
+// missing tail rejoined. Components that do not exist carry no symlinks, so
+// the rejoined form is canonical for comparison — the one exception being a
+// dangling symlink component, which EvalSymlinks also rejects and which stays
+// unresolved here exactly as it did under the old absolute-form fallback
+// (everything above it still gets resolved). The resulting root is either
+// walkable or missing — the same contract as before.
 func resolveRoot(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
