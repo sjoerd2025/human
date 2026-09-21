@@ -95,6 +95,13 @@ func TestSandboxBridgesInnerMockupsHop(t *testing.T) {
 	mockupMu.Lock()
 	mockupDirs["set1"] = dir
 	mockupMu.Unlock()
+	// Restore the global: it is shared package state other tests observe, so
+	// a test-written entry must not outlive this test's TempDir.
+	t.Cleanup(func() {
+		mockupMu.Lock()
+		delete(mockupDirs, "set1")
+		mockupMu.Unlock()
+	})
 
 	h := sandboxMiddleware(mockupMiddleware(http.NotFoundHandler()))
 	rec := httptest.NewRecorder()

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -94,6 +95,86 @@ func TestWebAPIKeepAlive(t *testing.T) {
 		assert.Equal(t, http.StatusOK, res.StatusCode)
 		assert.Contains(t, string(b), `"status":"ok"`)
 	}
+}
+
+// TestWebAPIMethodPrefixes proves the sniff catches every advertised method:
+// the peek must hold a whole method prefix, or the longest ones (PATCH,
+// DELETE, OPTIONS) would silently fall into the line-protocol handler.
+func TestWebAPIMethodPrefixes(t *testing.T) {
+	addr, _ := startWebAPIServer(t)
+	for _, method := range []string{
+		http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodHead, http.MethodOptions,
+	} {
+		req, err := http.NewRequest(method, "http://"+addr+"/api/healthz", nil)
+		require.NoError(t, err)
+		res, err := http.DefaultClient.Do(req)
+		require.NoError(t, err, method)
+		_, _ = io.Copy(io.Discard, res.Body)
+		_ = res.Body.Close()
+		// Any well-framed HTTP answer (200/404/405) proves the sniff worked;
+		// a fall-through would leave the client with a transport error.
+		assert.Contains(t, []int{http.StatusOK, http.StatusNotFound, http.StatusMethodNotAllowed}, res.StatusCode, method)
+	}
+}
+
+// TestWebAPIKeepAliveBodyDrained proves a request carrying a body does not
+// poison the next request on the same connection.
+func TestWebAPIKeepAliveBodyDrained(t *testing.T) {
+	addr, _ := startWebAPIServer(t)
+
+	conn, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	reader := bufio.NewReader(conn)
+	_, werr := fmt.Fprintf(conn, "POST /api/healthz HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+	require.NoError(t, werr)
+	res, rerr := http.ReadResponse(reader, nil)
+	require.NoError(t, rerr)
+	_, _ = io.Copy(io.Discard, res.Body)
+	assert.Equal(t, http.StatusMethodNotAllowed, res.StatusCode)
+
+	_, werr = conn.Write([]byte("GET /api/healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"))
+	require.NoError(t, werr)
+	res2, rerr := http.ReadResponse(reader, nil)
+	require.NoError(t, rerr)
+	b, _ := io.ReadAll(res2.Body)
+	assert.Equal(t, http.StatusOK, res2.StatusCode)
+	assert.Contains(t, string(b), `"status":"ok"`)
+}
+
+// TestWebAPIHeadHasNoBody proves a HEAD response is header-only, so the
+// next keep-alive response starts where the client expects it.
+func TestWebAPIHeadHasNoBody(t *testing.T) {
+	addr, _ := startWebAPIServer(t)
+
+	conn, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	reader := bufio.NewReader(conn)
+	_, werr := conn.Write([]byte("HEAD /api/healthz HTTP/1.1\r\nHost: x\r\n\r\n"))
+	require.NoError(t, werr)
+	// ReadResponse needs the request so it knows a HEAD response carries no
+	// body despite Content-Length.
+	headReq, herr := http.NewRequest(http.MethodHead, "http://"+addr+"/api/healthz", nil)
+	require.NoError(t, herr)
+	res, rerr := http.ReadResponse(reader, headReq)
+	require.NoError(t, rerr)
+	_, _ = io.Copy(io.Discard, res.Body)
+	// /api/healthz is GET-only by route table, so HEAD answers 405 — the
+	// point here is that the response is well-framed and bodyless, leaving
+	// the keep-alive connection usable for the next request.
+	assert.Equal(t, http.StatusMethodNotAllowed, res.StatusCode)
+	assert.Equal(t, "application/json", res.Header.Get("Content-Type"))
+
+	_, werr = conn.Write([]byte("GET /api/healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"))
+	require.NoError(t, werr)
+	res2, rerr := http.ReadResponse(reader, nil)
+	require.NoError(t, rerr)
+	_, _ = io.Copy(io.Discard, res2.Body)
+	assert.Equal(t, http.StatusOK, res2.StatusCode)
 }
 
 // TestWebAPIRejections covers the non-happy paths.

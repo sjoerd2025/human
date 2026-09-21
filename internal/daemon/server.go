@@ -312,9 +312,10 @@ func (s *Server) handleConn(conn net.Conn) {
 	// Seam 2 (web API): a connection whose first bytes are an HTTP request
 	// line is the browser-facing surface, not the CLI line protocol (which
 	// always starts with '{'). Peek without consuming and hand the whole
-	// conn — reader included, so no bytes are lost — to the HTTP loop.
-	// 5 bytes covers the longest method prefix, "POST ".
-	if head, perr := reader.Peek(5); perr == nil && isHTTPRequestLine(head) {
+	// conn — reader included, so no bytes are lost — to the HTTP loop. The
+	// peek must be able to hold a whole method prefix (maxHTTPMethodLen,
+	// "OPTIONS "), or requests under the longest methods fall through here.
+	if head, perr := reader.Peek(MaxHTTPMethodLen); perr == nil && IsHTTPRequestLine(head) {
 		s.serveWebAPIConn(conn, reader)
 		return
 	}

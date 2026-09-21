@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -34,6 +35,20 @@ var httpMethods = [][]byte{
 	[]byte(http.MethodOptions + " "),
 }
 
+// maxHTTPMethodLen is the longest prefix in httpMethods ("DELETE " and
+// "OPTIONS "). server.go peeks this many bytes: the peek must be able to
+// contain a WHOLE prefix, or requests under the longest methods silently
+// fall into the line-protocol handler.
+var maxHTTPMethodLen = func() int {
+	max := 0
+	for _, m := range httpMethods {
+		if len(m) > max {
+			max = len(m)
+		}
+	}
+	return max
+}()
+
 // isHTTPRequestLine reports whether the first line read off a connection is
 // an HTTP request line ("GET /api/healthz HTTP/1.1") rather than a JSON
 // protocol request.
@@ -45,6 +60,14 @@ func isHTTPRequestLine(line []byte) bool {
 	}
 	return false
 }
+
+// IsHTTPRequestLine and MaxHTTPMethodLen expose the sniff to server.go,
+// which owns the peek that feeds it.
+func IsHTTPRequestLine(line []byte) bool { return isHTTPRequestLine(line) }
+
+// MaxHTTPMethodLen is the peek width server.go needs: the longest method
+// prefix in httpMethods ("DELETE ", "OPTIONS ").
+var MaxHTTPMethodLen = maxHTTPMethodLen
 
 // serveWebAPIConn answers HTTP requests on a connection detected by
 // isHTTPRequestLine, then returns (the caller closes the conn). Requests are
@@ -66,6 +89,15 @@ func (s *Server) serveWebAPIConn(conn net.Conn, reader *bufio.Reader) {
 		req, err := http.ReadRequest(reader)
 		if err != nil {
 			return // EOF between requests, or garbage: drop the conn
+		}
+
+		// Consume any request body so the next ReadRequest on a keep-alive
+		// connection starts at a real request line. None of this surface's
+		// handlers read bodies, so an undrained body would otherwise be
+		// parsed as the next request and kill the connection.
+		if req.Body != nil {
+			_, _ = io.Copy(io.Discard, req.Body)
+			_ = req.Body.Close()
 		}
 
 		keepOpen := s.routeWebAPI(conn, req)
@@ -103,9 +135,17 @@ func (s *Server) writeWebAPI(conn net.Conn, req *http.Request, status int, body 
 	if req.Close {
 		connection = "close"
 	}
+	// HEAD answers with the headers a GET would get (Content-Length
+	// included) but never body bytes — writing the body anyway leaves it
+	// sitting in the stream, where a keep-alive client mis-frames its next
+	// response (or a strict client refuses the response outright).
+	payload := b
+	if req.Method == http.MethodHead {
+		payload = nil
+	}
 	_, err = fmt.Fprintf(conn,
 		"HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: %s\r\n\r\n%s",
-		status, http.StatusText(status), len(b), connection, b)
+		status, http.StatusText(status), len(b), connection, payload)
 	if err != nil {
 		s.Logger.Warn().Err(err).Str("path", req.URL.Path).Msg("web api response write failed")
 		return false
