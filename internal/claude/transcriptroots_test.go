@@ -274,6 +274,12 @@ func TestResolveRoot_missingTailUnderSymlinkedBase(t *testing.T) {
 	if err := os.Symlink(base, link); err != nil {
 		t.Skipf("symlinks unsupported: %v", err)
 	}
+	// link/real must exist: the discriminating pair is an EXISTING root
+	// (which the old code resolved to the real path) against a missing tail
+	// under it (which the old code left in the unresolved symlink spelling).
+	if err := os.MkdirAll(filepath.Join(base, "real"), 0o750); err != nil {
+		t.Fatal(err)
+	}
 
 	existing := resolveRoot(filepath.Join(link, "real"))
 	missing := resolveRoot(filepath.Join(link, "real", "child"))
