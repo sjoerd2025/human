@@ -117,6 +117,16 @@ function Gallery() {
   );
 }
 
+// EmbedFrame renders an iframe of <target> resolved against this app's base
+// path — the combine plan's 3a bridge: the board's Mockups view opens
+// /mocks/embed/mockups/<slug>/<file>, which lands here and frames the static
+// set that the Go middleware serves at /mockups/<slug>/<file>. Query strings
+// pass through so future params survive the hop.
+function EmbedFrame({ target }: { target: string }) {
+  const src = `${getBasePath()}/${target}`;
+  return <iframe src={src} title="Mockup" className="h-screen w-screen border-0" />;
+}
+
 function getPreviewPath(): string | null {
   const basePath = getBasePath();
   const { pathname } = window.location;
@@ -128,7 +138,27 @@ function getPreviewPath(): string | null {
   return match ? match[1] : null;
 }
 
+// getEmbedTarget matches the board's deep-link bridge /embed/<target> and
+// returns <target> plus the query string, or null. Like getPreviewPath it
+// strips this app's base path first, so it works both at BASE_PATH=/mocks/
+// (the desktop embed) and at the dev server root.
+function getEmbedTarget(): string | null {
+  const basePath = getBasePath();
+  const { pathname, search } = window.location;
+  const local =
+    basePath && pathname.startsWith(basePath)
+      ? pathname.slice(basePath.length) || "/"
+      : pathname;
+  const match = local.match(/^\/embed\/(.+)$/);
+  return match ? match[1] + search : null;
+}
+
 function App() {
+  const embedTarget = getEmbedTarget();
+  if (embedTarget) {
+    return <EmbedFrame target={embedTarget} />;
+  }
+
   const previewPath = getPreviewPath();
 
   if (previewPath) {

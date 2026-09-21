@@ -29,3 +29,15 @@ desktop/frontend/wailsjs/
 desktop/frontend/package.json.md5
 !desktop/frontend/dist/
 !desktop/frontend/dist/**
+
+# The embedded React sandbox (desktop/web-dist) is a committed artifact like
+# the board's dist/: built from web/artifacts/mockup-sandbox with
+# BASE_PATH=/mocks/ PORT=5174, copied in by `make web-dist-check`, and
+# diff-guarded so a source edit that never got rebuilt is visible before a
+# push instead of only after one. Force-un-ignored against the global dist/
+# rule for the same reason the board's is.
+!desktop/web-dist/
+!desktop/web-dist/**
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
