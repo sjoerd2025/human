@@ -1,4 +1,4 @@
-.PHONY: all build build-linux fmt fmt-check install test check-test test-integration coverage coverage-check fuzz fsm fsm-diagram lint sec secrets check clean upgrade-deps release hooks unhooks desktop desktop-deps desktop-dev desktop-package desktop-frontend desktop-frontend-check
+.PHONY: all build build-linux fmt fmt-check install test check-test test-integration coverage coverage-check fuzz fsm fsm-diagram lint sec secrets check clean upgrade-deps release hooks unhooks desktop desktop-deps desktop-dev desktop-package desktop-frontend desktop-frontend-check web-install web-build web-typecheck web-dist-check
 
 VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 
@@ -165,6 +165,32 @@ desktop-frontend:
 
 desktop-frontend-check: desktop-frontend
 	cd desktop/frontend && node scripts/dist-guard.mjs
+
+# The pnpm side of the desktop embed (combine plan Phase 3/5). The sandbox
+# (web/artifacts/mockup-sandbox) is built with the /mocks/ base path and
+# copied into desktop/web-dist/, which //go:embed all:web-dist binds at
+# compile time — so a stale copy ships silently frozen artifacts exactly
+# like the board's dist/ does (SC-3613). web-dist-check is the pnpm-side
+# guard: rebuild, recopy, and diff against git so drift is visible before a
+# push. Deliberately NOT part of `check` for the same reason
+# desktop-frontend-check is not: this gate runs where pnpm may not exist.
+web-install:
+	cd web && pnpm install
+
+web-build: web-install
+	cd web && pnpm --filter @workspace/mockup-sandbox build
+
+web-typecheck:
+	cd web && pnpm run typecheck
+
+web-dist-check: web-install
+	cd web && BASE_PATH=/mocks/ PORT=5174 pnpm --filter @workspace/mockup-sandbox build
+	cp -R web/artifacts/mockup-sandbox/dist/* desktop/web-dist/
+	git diff --exit-code -- desktop/web-dist || { \
+		echo "error: desktop/web-dist is stale — the fresh build above differs from the committed artifact."; \
+		echo "       Commit the rebuilt artifacts (they are deliberately checked in); never weaken the guard."; \
+		exit 1; \
+	}
 
 # desktop-package produces a clean distributable bundle (.app/.exe/AppImage) for
 # the current OS. Note: macOS code-signing/notarization is NOT performed here —
