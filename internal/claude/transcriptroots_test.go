@@ -222,14 +222,20 @@ func TestTranscriptRoots_noHomeSkipsHostRoot(t *testing.T) {
 
 func TestTranscriptRoots_missingProjectDirStillReturned(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	gone := filepath.Join(t.TempDir(), "gone")
+	base := t.TempDir()
+	gone := filepath.Join(base, "gone")
 
 	got := TranscriptRoots([]string{gone})
 	if len(got) != 2 {
 		t.Fatalf("got %d roots %v, want 2 — a not-yet-created root is kept", len(got), got)
 	}
-	if got[1] != AgentTranscriptRoot(gone) {
-		t.Errorf("root = %q, want the unresolved absolute form %q", got[1], AgentTranscriptRoot(gone))
+	// The root must come back canonical: the missing tail rejoined onto the
+	// resolved ancestor. On darwin this is the /private/var/... form — the
+	// unresolved /var/... form once made dedupeRoots miss that this root sat
+	// inside an existing one (TestTranscriptRoots_dropsNestedRoot).
+	want := filepath.Join(resolved(t, base), "gone", ".devcontainer", "claude", "projects")
+	if got[1] != want {
+		t.Errorf("root = %q, want the canonical form %q", got[1], want)
 	}
 }
 
@@ -256,10 +262,36 @@ func TestPathWithin_boundaries(t *testing.T) {
 	}
 }
 
+// TestResolveRoot_missingTailUnderSymlinkedBase reproduces the darwin TMPDIR
+// failure portably: an existing root reached through a symlinked base (macOS
+// resolves /var/folders/... to /private/var/folders/...) canonicalises to the
+// real path, so a missing tail under the unresolved base must come back in the
+// same form — or dedupeRoots cannot see that it sits inside an existing root
+// and both get walked (the nested-root double count).
+func TestResolveRoot_missingTailUnderSymlinkedBase(t *testing.T) {
+	base := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(base, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	existing := resolveRoot(filepath.Join(link, "real"))
+	missing := resolveRoot(filepath.Join(link, "real", "child"))
+	if !pathWithin(missing, existing) {
+		t.Errorf("missing root %q is not seen as within existing root %q — the two forms would both be walked", missing, existing)
+	}
+}
+
 func TestResolveRoot_keepsMissingPath(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "never", "created")
-	if got := resolveRoot(missing); got != missing {
-		t.Errorf("resolveRoot(%q) = %q, want the absolute form unchanged", missing, got)
+	base := t.TempDir()
+	missing := filepath.Join(base, "never", "created")
+	got := resolveRoot(missing)
+	// The path is still kept (walkers treat a missing tree as empty), but in
+	// canonical form: the missing tail rejoined onto the resolved ancestor —
+	// the same string dedupeRoots would produce for an existing root there.
+	want := filepath.Join(resolved(t, base), "never", "created")
+	if got != want {
+		t.Errorf("resolveRoot(%q) = %q, want the canonical form %q", missing, got, want)
 	}
 }
 
