@@ -8,10 +8,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gethuman-sh/human/internal/mockups"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -208,4 +211,165 @@ func TestLineProtocolUnaffected(t *testing.T) {
 	// "status" isn't routed here, so it exits non-zero — but crucially it got
 	// a line-protocol response, not an HTTP error page.
 	assert.NotContains(t, resp.Stderr, "HTTP/1.1")
+}
+
+// startMockupAPIServer is startWebAPIServer plus a project override pointing
+// the /api mockup surface at a temp fixture layout:
+//
+//	projA/mockups/alpha/index.json (+2 options)
+//	projA/mockups/beta/index.json  (newer than alpha)
+//	projB/mockups/alpha/index.json (duplicate slug — first project wins)
+func startMockupAPIServer(t *testing.T) (addr string, projA, projB string) {
+	t.Helper()
+	projA, projB = t.TempDir(), t.TempDir()
+	writeSetManifest(t, projA, "alpha", "2026-09-21T10:00:00Z", "Alpha feature", 2)
+	writeSetManifest(t, projA, "beta", "2026-09-21T11:00:00Z", "Beta feature", 1)
+	writeSetManifest(t, projB, "alpha", "2026-09-21T09:00:00Z", "Duplicate slug", 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := &Server{
+		Addr:       "127.0.0.1:0",
+		Token:      "tok",
+		CmdFactory: echoCmd,
+		Logger:     zerolog.Nop(),
+		WebAPIProjects: func() []mockups.Project {
+			return []mockups.Project{{Name: "projA", Dir: projA}, {Name: "projB", Dir: projB}}
+		},
+	}
+	ln, err := net.Listen("tcp", srv.Addr)
+	require.NoError(t, err)
+	addr = ln.Addr().String()
+	_ = ln.Close()
+	srv.Addr = addr
+	go func() { _ = srv.ListenAndServe(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, derr := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if derr == nil {
+			_ = conn.Close()
+			t.Cleanup(cancel)
+			return addr, projA, projB
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	t.Fatalf("daemon did not accept connections on %s within 2s", addr)
+	return addr, projA, projB
+}
+
+// writeSetManifest lays down one mockups/<slug>/ tree with n option HTML
+// files and a manifest pointing at them.
+func writeSetManifest(t *testing.T, projectDir, slug, created, feature string, n int) {
+	t.Helper()
+	setDir := filepath.Join(projectDir, "mockups", slug)
+	require.NoError(t, os.MkdirAll(setDir, 0o750))
+	options := make([]map[string]any, n)
+	for i := range options {
+		file := fmt.Sprintf("%02d-opt.html", i+1)
+		require.NoError(t, os.WriteFile(filepath.Join(setDir, file), []byte("<html>"+slug+"</html>"), 0o600))
+		options[i] = map[string]any{"n": i + 1, "name": fmt.Sprintf("Option %d", i+1), "file": file}
+	}
+	manifest := map[string]any{"slug": slug, "feature": feature, "created": created, "options": options}
+	data, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(setDir, "index.json"), data, 0o600))
+}
+
+func getJSON(t *testing.T, addr, path string) (int, string) {
+	t.Helper()
+	res, err := http.Get("http://" + addr + path)
+	require.NoError(t, err)
+	defer func() { _ = res.Body.Close() }()
+	b, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	return res.StatusCode, string(b)
+}
+
+func TestWebAPIMockupSets(t *testing.T) {
+	addr, _, _ := startMockupAPIServer(t)
+
+	status, body := getJSON(t, addr, "/api/mockup-sets")
+	require.Equal(t, http.StatusOK, status, body)
+
+	var sets []struct {
+		Slug    string `json:"slug"`
+		Feature string `json:"feature"`
+		Project string `json:"project"`
+		Created string `json:"created"`
+		Options []struct {
+			N    int    `json:"n"`
+			Name string `json:"name"`
+			File string `json:"file"`
+		} `json:"options"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &sets))
+	// Two sets: newest first, and projB's duplicate alpha never surfaces —
+	// the slug is the URL key, so first project wins and the dup is dropped.
+	require.Len(t, sets, 2)
+	assert.Equal(t, "beta", sets[0].Slug)
+	assert.Equal(t, "projA", sets[0].Project)
+	assert.Equal(t, "alpha", sets[1].Slug)
+	assert.Equal(t, "projA", sets[1].Project)
+	assert.Equal(t, "2026-09-21T10:00:00Z", sets[1].Created)
+	assert.Len(t, sets[1].Options, 2)
+	assert.Equal(t, "01-opt.html", sets[1].Options[0].File)
+}
+
+func TestWebAPIMockupSetBySlug(t *testing.T) {
+	addr, projA, projB := startMockupAPIServer(t)
+
+	status, body := getJSON(t, addr, "/api/mockup-sets/alpha")
+	require.Equal(t, http.StatusOK, status, body)
+	var got struct {
+		Set struct {
+			Slug    string                  `json:"slug"`
+			Project string                  `json:"project"`
+			Options []struct{ File string } `json:"options"`
+		} `json:"set"`
+		Dir string `json:"dir"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &got))
+	assert.Equal(t, "alpha", got.Set.Slug)
+	assert.Equal(t, "projA", got.Set.Project, "first project wins the slug")
+	assert.Len(t, got.Set.Options, 2)
+	assert.Equal(t, filepath.Join(projA, "mockups", "alpha"), got.Dir)
+	assert.NotEqual(t, filepath.Join(projB, "mockups", "alpha"), got.Dir)
+
+	status, _ = getJSON(t, addr, "/api/mockup-sets/missing-slug")
+	assert.Equal(t, http.StatusNotFound, status)
+
+	status, _ = getJSON(t, addr, "/api/mockup-sets/")
+	assert.Equal(t, http.StatusNotFound, status)
+}
+
+func TestWebAPIMockupSetRoutes_MethodsAndTraversal(t *testing.T) {
+	addr, _, _ := startMockupAPIServer(t)
+
+	// POST to the collection: 405, and the body is drained so the connection
+	// stays usable (kept alive by default).
+	conn, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+	reader := bufio.NewReader(conn)
+	_, werr := fmt.Fprintf(conn, "POST /api/mockup-sets HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello")
+	require.NoError(t, werr)
+	res, rerr := http.ReadResponse(reader, nil)
+	require.NoError(t, rerr)
+	_, _ = io.Copy(io.Discard, res.Body)
+	assert.Equal(t, http.StatusMethodNotAllowed, res.StatusCode)
+
+	_, werr = conn.Write([]byte("GET /api/mockup-sets/beta HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"))
+	require.NoError(t, werr)
+	res2, rerr := http.ReadResponse(reader, nil)
+	require.NoError(t, rerr)
+	b, _ := io.ReadAll(res2.Body)
+	assert.Equal(t, http.StatusOK, res2.StatusCode)
+	assert.Contains(t, string(b), `"slug":"beta"`)
+
+	// Traversal in the slug is rejected as not-found by the slug vetting.
+	for _, p := range []string{"/api/mockup-sets/..%2F..%2Fsecret", "/api/mockup-sets/a%2Fb"} {
+		status, _ := getJSON(t, addr, p)
+		assert.Equal(t, http.StatusNotFound, status, p)
+	}
 }

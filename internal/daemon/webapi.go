@@ -4,11 +4,17 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/gethuman-sh/human/internal/mockups"
 )
 
 // The web API is the Express-shaped HTTP surface mounted on the daemon's
@@ -115,11 +121,64 @@ func (s *Server) routeWebAPI(conn net.Conn, req *http.Request) bool {
 		return s.writeWebAPI(conn, req, http.StatusOK, map[string]string{"status": "ok"})
 	case req.URL.Path == "/api/healthz":
 		return s.writeWebAPI(conn, req, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	case req.URL.Path == "/api/mockup-sets" && req.Method == http.MethodGet:
+		return s.webAPIScanSets(conn, req)
+	case strings.HasPrefix(req.URL.Path, "/api/mockup-sets/") && req.Method == http.MethodGet:
+		return s.webAPIScanSet(conn, req, strings.TrimPrefix(req.URL.Path, "/api/mockup-sets/"))
+	case req.URL.Path == "/api/mockup-sets" || strings.HasPrefix(req.URL.Path, "/api/mockup-sets/"):
+		return s.writeWebAPI(conn, req, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	default:
 		// Unknown path — including anything not under /api. The web API
 		// only ever serves the /api subtree the spec declares.
 		return s.writeWebAPI(conn, req, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
+}
+
+// webAPIProjects lists the projects to scan for mockup sets: the ones this
+// daemon has registered (its info file is the same source the board's
+// mockupRoots reads), falling back to the daemon's own working directory so a
+// project-scoped daemon still answers about its own project.
+func (s *Server) webAPIProjects() []mockups.Project {
+	if s.WebAPIProjects != nil {
+		return s.WebAPIProjects()
+	}
+	if info, err := ReadInfo(); err == nil && len(info.Projects) > 0 {
+		out := make([]mockups.Project, len(info.Projects))
+		for i, p := range info.Projects {
+			out[i] = mockups.Project{Name: p.Name, Dir: p.Dir}
+		}
+		return out
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return []mockups.Project{{Name: filepath.Base(wd), Dir: wd}}
+	}
+	return nil
+}
+
+// webAPIScanSets serves GET /api/mockup-sets: every set the daemon's projects
+// hold, newest first. Read-only and unauthenticated by the same reasoning as
+// /api/healthz: the listener is loopback-only, and the manifests list what a
+// `ls mockups/` on the same machine already shows.
+func (s *Server) webAPIScanSets(conn net.Conn, req *http.Request) bool {
+	sets, _, err := mockups.ScanSets(s.webAPIProjects())
+	if err != nil {
+		return s.writeWebAPI(conn, req, http.StatusInternalServerError, map[string]string{"error": "scan failed"})
+	}
+	return s.writeWebAPI(conn, req, http.StatusOK, sets)
+}
+
+// webAPIScanSet serves GET /api/mockup-sets/{slug}: one set's manifest and
+// the directory it lives in (the desktop's file middleware serves the option
+// HTML from disk; the API consumer needs the mapping to build those URLs).
+func (s *Server) webAPIScanSet(conn net.Conn, req *http.Request, slug string) bool {
+	set, dir, err := mockups.ScanSet(s.webAPIProjects(), slug)
+	if errors.Is(err, mockups.ErrSetNotFound) {
+		return s.writeWebAPI(conn, req, http.StatusNotFound, map[string]string{"error": "not found"})
+	}
+	if err != nil {
+		return s.writeWebAPI(conn, req, http.StatusInternalServerError, map[string]string{"error": "scan failed"})
+	}
+	return s.writeWebAPI(conn, req, http.StatusOK, map[string]any{"set": set, "dir": dir})
 }
 
 // writeWebAPI frames one JSON response. It reports whether the connection
