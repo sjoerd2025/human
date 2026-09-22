@@ -35,9 +35,13 @@ type Set struct {
 
 // SetItem is one option within a set: a static HTML file and its label.
 type SetItem struct {
-	N           int    `json:"n"`
-	Name        string `json:"name"`
-	File        string `json:"file"`
+	N    int    `json:"n"`
+	Name string `json:"name"`
+	File string `json:"file"`
+	// Component is the option's React twin (NN-name.tsx) when the set was
+	// generated in 3b form — what the sandbox renders live at
+	// /preview/<slug>/<file>. Empty for pre-3b sets, which stay HTML-only.
+	Component   string `json:"component,omitempty"`
 	Description string `json:"description,omitempty"`
 }
 
@@ -141,4 +145,46 @@ func ScanSet(projects []Project, slug string) (Set, string, error) {
 		return set, setDir, nil
 	}
 	return Set{}, "", ErrSetNotFound
+}
+
+// ErrFileNotFound is returned by ReadSetFile when the requested file is not
+// part of the set as its manifest declares it.
+var ErrFileNotFound = errors.New("mockup file not found in set")
+
+// fileOK reports whether name is a plain, safe, non-nested file name — the
+// only form manifest entries take.
+func fileOK(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		return false
+	}
+	return true
+}
+
+// ReadSetFile returns the contents of a file that the set's manifest lists —
+// and ONLY such a files: component twins are served to the sandbox's live
+// renderer over this path, so "whatever happens to sit in the directory" is
+// not the contract. slug and name are vetted against nesting and traversal.
+// First project wins, matching ScanSet.
+func ReadSetFile(projects []Project, slug, name string) ([]byte, error) {
+	if !fileOK(slug) || !fileOK(name) {
+		return nil, ErrFileNotFound
+	}
+	set, dir, err := ScanSet(projects, slug)
+	if err != nil {
+		return nil, err
+	}
+	listed := false
+	for _, o := range set.Options {
+		if o.File == name || o.Component == name {
+			listed = true
+			break
+		}
+	}
+	if !listed {
+		return nil, ErrFileNotFound
+	}
+	return os.ReadFile(filepath.Join(dir, name)) // #nosec G304 — both components vetted
 }

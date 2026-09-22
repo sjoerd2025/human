@@ -34,6 +34,7 @@ export const ListMockupSetsResponseItem = zod.object({
   "n": zod.number().int(),
   "name": zod.string(),
   "file": zod.string(),
+  "component": zod.string().optional().describe('The option\'s React twin (tsx), when the set has one'),
   "description": zod.string().optional()
 }))
 })
@@ -62,10 +63,23 @@ export const GetMockupSetResponse = zod.object({
   "n": zod.number().int(),
   "name": zod.string(),
   "file": zod.string(),
+  "component": zod.string().optional().describe('The option\'s React twin (tsx), when the set has one'),
   "description": zod.string().optional()
 }))
 }),
   "dir": zod.string()
 })
+
+
+/**
+ * The raw contents of a file the set's manifest lists — in practice a component twin's tsx, which the sandbox renders live. Unlisted files are 404: the manifest is the contract, the directory is not readable through this route.
+ * @summary Read one manifest-listed file of a mockup set
+ */
+export const GetMockupSetSourceParams = zod.object({
+  "slug": zod.coerce.string(),
+  "file": zod.coerce.string()
+})
+
+export const GetMockupSetSourceResponse = zod.string()
 
 

@@ -1,0 +1,1 @@
+import{j as m}from"./index-DjvvOTYd.js";import{c as o}from"./utils-Bk382tBs.js";function s({className:r,...e}){return m.jsx("div",{className:o("animate-pulse rounded-md bg-primary/10",r),...e})}export{s as Skeleton};

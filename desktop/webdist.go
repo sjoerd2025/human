@@ -93,6 +93,15 @@ func sandboxMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// /mocks/preview/… is an app route even when its last segment carries
+		// an extension — the 3b twin form is /preview/<slug>/<file.tsx>, and
+		// the extension rule below would otherwise send it to the file
+		// server (404) instead of the shell that renders it.
+		if strings.HasPrefix(rest, "preview/") {
+			serveSandboxIndex(w, r, sub)
+			return
+		}
+
 		// Extension-carrying paths are real files: serve exactly, 404 loudly
 		// when absent (a missing hashed asset must never masquerade as the
 		// app shell). Extension-less paths are app routes: SPA fallback.

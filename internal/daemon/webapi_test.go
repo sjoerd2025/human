@@ -276,6 +276,26 @@ func writeSetManifest(t *testing.T, projectDir, slug, created, feature string, n
 	require.NoError(t, os.WriteFile(filepath.Join(setDir, "index.json"), data, 0o600))
 }
 
+// writeTwinSetManifest writes a 3b-form set: each option is an HTML file plus
+// a component twin, and the manifest lists both ("file" + "component").
+func writeTwinSetManifest(t *testing.T, projectDir, slug, created, feature string, n int) {
+	t.Helper()
+	setDir := filepath.Join(projectDir, "mockups", slug)
+	require.NoError(t, os.MkdirAll(setDir, 0o750))
+	options := make([]map[string]any, n)
+	for i := range options {
+		html := fmt.Sprintf("%02d-opt.html", i+1)
+		tsx := fmt.Sprintf("%02d-opt.tsx", i+1)
+		require.NoError(t, os.WriteFile(filepath.Join(setDir, html), []byte("<html>"+slug+"</html>"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(setDir, tsx), []byte("export default function Opt"+slug+"() { return null }"), 0o600))
+		options[i] = map[string]any{"n": i + 1, "name": fmt.Sprintf("Option %d", i+1), "file": html, "component": tsx}
+	}
+	manifest := map[string]any{"slug": slug, "feature": feature, "created": created, "options": options}
+	data, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(setDir, "index.json"), data, 0o600))
+}
+
 func getJSON(t *testing.T, addr, path string) (int, string) {
 	t.Helper()
 	res, err := http.Get("http://" + addr + path)
@@ -372,4 +392,88 @@ func TestWebAPIMockupSetRoutes_MethodsAndTraversal(t *testing.T) {
 		status, _ := getJSON(t, addr, p)
 		assert.Equal(t, http.StatusNotFound, status, p)
 	}
+}
+
+// TestWebAPIMockupSetSource covers GET /api/mockup-sets/{slug}/source/{file}:
+// manifest-listed files are served raw (a twin's tsx, or its listed html),
+// everything else — unlisted names, nesting, traversal — is 404.
+func TestWebAPIMockupSetSource(t *testing.T) {
+	proj := t.TempDir()
+	writeTwinSetManifest(t, proj, "twins", "2026-09-22T09:00:00Z", "Twin feature", 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := &Server{
+		Addr: "127.0.0.1:0", Token: "tok", CmdFactory: echoCmd, Logger: zerolog.Nop(),
+		WebAPIProjects: func() []mockups.Project {
+			return []mockups.Project{{Name: "p", Dir: proj}}
+		},
+	}
+	ln, err := net.Listen("tcp", srv.Addr)
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	srv.Addr = addr
+	go func() { _ = srv.ListenAndServe(ctx) }()
+	t.Cleanup(cancel)
+	// Readiness probe: ListenAndServe binds asynchronously; dial until it
+	// answers or the first GET races the bind.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if c, derr := net.DialTimeout("tcp", addr, 100*time.Millisecond); derr == nil {
+			_ = c.Close()
+			break
+		}
+		require.Less(t, time.Now(), deadline, "web api server never came up")
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// A component twin serves as text/plain with the file's contents.
+	res, err := http.Get("http://" + addr + "/api/mockup-sets/twins/source/01-opt.tsx")
+	require.NoError(t, err)
+	b, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "text/plain; charset=utf-8", res.Header.Get("Content-Type"))
+	assert.Contains(t, string(b), "export default function Opt")
+
+	// A manifest-listed HTML file is served the same way.
+	status, body := getJSON(t, addr, "/api/mockup-sets/twins/source/02-opt.html")
+	assert.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "<html>")
+
+	// A file on disk but NOT in the manifest is 404 — the manifest is the
+	// contract, the directory is not readable through this route.
+	require.NoError(t, os.WriteFile(filepath.Join(proj, "mockups", "twins", "secret.txt"), []byte("nope"), 0o600))
+	status, _ = getJSON(t, addr, "/api/mockup-sets/twins/source/secret.txt")
+	assert.Equal(t, http.StatusNotFound, status)
+
+	// Traversal and nesting never reach the disk.
+	for _, p := range []string{
+		"/api/mockup-sets/twins/source/..%2F..%2Fsecret.txt",
+		"/api/mockup-sets/twins/source/sub%2F01-opt.tsx",
+	} {
+		status, _ = getJSON(t, addr, p)
+		assert.Equal(t, http.StatusNotFound, status, p)
+	}
+
+	// HEAD is 405 — the source route is GET-only like every other /api
+	// route — and the connection stays usable afterwards (the 405 must not
+	// poison the keep-alive framing).
+	conn, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+	reader := bufio.NewReader(conn)
+	_, werr := fmt.Fprintf(conn, "HEAD /api/mockup-sets/twins/source/01-opt.tsx HTTP/1.1\r\nHost: x\r\n\r\n")
+	require.NoError(t, werr)
+	res2, rerr := http.ReadResponse(reader, &http.Request{Method: http.MethodHead})
+	require.NoError(t, rerr)
+	_, _ = io.Copy(io.Discard, res2.Body)
+	assert.Equal(t, http.StatusMethodNotAllowed, res2.StatusCode)
+
+	_, werr = conn.Write([]byte("GET /api/mockup-sets/twins/source/01-opt.tsx HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"))
+	require.NoError(t, werr)
+	res3, rerr := http.ReadResponse(reader, nil)
+	require.NoError(t, rerr)
+	b3, _ := io.ReadAll(res3.Body)
+	assert.Equal(t, http.StatusOK, res3.StatusCode)
+	assert.Contains(t, string(b3), "export default function Opt")
 }
