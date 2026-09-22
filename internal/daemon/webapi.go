@@ -124,7 +124,11 @@ func (s *Server) routeWebAPI(conn net.Conn, req *http.Request) bool {
 	case req.URL.Path == "/api/mockup-sets" && req.Method == http.MethodGet:
 		return s.webAPIScanSets(conn, req)
 	case strings.HasPrefix(req.URL.Path, "/api/mockup-sets/") && req.Method == http.MethodGet:
-		return s.webAPIScanSet(conn, req, strings.TrimPrefix(req.URL.Path, "/api/mockup-sets/"))
+		rest := strings.TrimPrefix(req.URL.Path, "/api/mockup-sets/")
+		if slug, file, ok := strings.Cut(rest, "/source/"); ok && slug != "" && file != "" {
+			return s.webAPISetSource(conn, req, slug, file)
+		}
+		return s.webAPIScanSet(conn, req, rest)
 	case req.URL.Path == "/api/mockup-sets" || strings.HasPrefix(req.URL.Path, "/api/mockup-sets/"):
 		return s.writeWebAPI(conn, req, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	default:
@@ -181,6 +185,24 @@ func (s *Server) webAPIScanSet(conn net.Conn, req *http.Request, slug string) bo
 	return s.writeWebAPI(conn, req, http.StatusOK, map[string]any{"set": set, "dir": dir})
 }
 
+// webAPISetSource serves GET /api/mockup-sets/{slug}/source/{file}: the raw
+// contents of a file the set's manifest lists (in practice a component twin's
+// tsx, which the sandbox renders live). Manifest-validated via
+// mockups.ReadSetFile — an unlisted path is 404, not a directory read.
+func (s *Server) webAPISetSource(conn net.Conn, req *http.Request, slug, name string) bool {
+	if req.URL.RawQuery != "" {
+		return s.writeWebAPI(conn, req, http.StatusBadRequest, map[string]string{"error": "no query parameters"})
+	}
+	data, err := mockups.ReadSetFile(s.webAPIProjects(), slug, name)
+	if errors.Is(err, mockups.ErrSetNotFound) || errors.Is(err, mockups.ErrFileNotFound) {
+		return s.writeWebAPI(conn, req, http.StatusNotFound, map[string]string{"error": "not found"})
+	}
+	if err != nil {
+		return s.writeWebAPI(conn, req, http.StatusInternalServerError, map[string]string{"error": "read failed"})
+	}
+	return s.writeWebAPIText(conn, req, http.StatusOK, "text/plain; charset=utf-8", data)
+}
+
 // writeWebAPI frames one JSON response. It reports whether the connection
 // stays open (HTTP/1.1 keep-alive), per req.Close as resolved by
 // http.ReadRequest from the Connection header.
@@ -190,6 +212,13 @@ func (s *Server) writeWebAPI(conn net.Conn, req *http.Request, status int, body 
 		b = []byte(`{"error":"internal error"}`)
 		status = http.StatusInternalServerError
 	}
+	return s.writeWebAPIText(conn, req, status, "application/json", b)
+}
+
+// writeWebAPIText frames one response with the given content type. It reports
+// whether the connection stays open (HTTP/1.1 keep-alive), per req.Close as
+// resolved by http.ReadRequest from the Connection header.
+func (s *Server) writeWebAPIText(conn net.Conn, req *http.Request, status int, contentType string, b []byte) bool {
 	connection := "keep-alive"
 	if req.Close {
 		connection = "close"
@@ -202,9 +231,9 @@ func (s *Server) writeWebAPI(conn net.Conn, req *http.Request, status int, body 
 	if req.Method == http.MethodHead {
 		payload = nil
 	}
-	_, err = fmt.Fprintf(conn,
-		"HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: %s\r\n\r\n%s",
-		status, http.StatusText(status), len(b), connection, payload)
+	_, err := fmt.Fprintf(conn,
+		"HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: %s\r\n\r\n%s",
+		status, http.StatusText(status), contentType, len(b), connection, payload)
 	if err != nil {
 		s.Logger.Warn().Err(err).Str("path", req.URL.Path).Msg("web api response write failed")
 		return false

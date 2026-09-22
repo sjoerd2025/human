@@ -2,6 +2,7 @@ import { useEffect, useState, type ComponentType } from "react";
 
 import { useListMockupSets } from "@workspace/api-client-react";
 
+import { loadDynamicMockup } from "./lib/dynamicMockup";
 import { modules as discoveredModules } from "./.generated/mockup-components";
 
 type ModuleMap = Record<string, () => Promise<Record<string, unknown>>>;
@@ -208,6 +209,15 @@ function Gallery() {
                   >
                     {opt.name}
                   </a>
+                  {opt.component && (
+                    <a
+                      className="text-xs text-gray-500 hover:text-blue-600 hover:underline ml-1.5"
+                      href={`${getBasePath()}/preview/${encodeURIComponent(set.slug)}/${encodeURIComponent(opt.component)}`}
+                      title="Live render of the component twin"
+                    >
+                      ⚛ live
+                    </a>
+                  )}
                 </li>
               ))}
             </ul>
@@ -228,7 +238,17 @@ function EmbedFrame({ target }: { target: string }) {
   return <iframe src={src} title="Mockup" className="h-screen w-screen border-0" />;
 }
 
-function getPreviewPath(): string | null {
+// getParsedPreviewPath splits this app's /preview/ routes into their two
+// forms: {kind: "local"} for a component bundled into the sandbox itself
+// (build-time discovery), {kind: "twin", slug} for a project-generated
+// component twin served from disk via the daemon API (3b form:
+// /preview/<slug>/<file.tsx>). The twin form is recognized by a second
+// segment ending in .tsx.
+type ParsedPreview =
+  | { kind: "local"; componentPath: string }
+  | { kind: "twin"; slug: string; file: string };
+
+function getParsedPreviewPath(): ParsedPreview | null {
   const basePath = getBasePath();
   const { pathname } = window.location;
   const local =
@@ -236,7 +256,58 @@ function getPreviewPath(): string | null {
       ? pathname.slice(basePath.length) || "/"
       : pathname;
   const match = local.match(/^\/preview\/(.+)$/);
-  return match ? match[1] : null;
+  if (!match) return null;
+  const rest = match[1];
+  const twin = rest.match(/^([^/]+)\/([^/]+\.tsx)$/);
+  if (twin) {
+    return { kind: "twin", slug: twin[1], file: twin[2] };
+  }
+  return { kind: "local", componentPath: rest };
+}
+
+// DynamicPreview loads a project-generated twin through the daemon and the
+// runtime transform (see lib/dynamicMockup.tsx).
+function DynamicPreview({ slug, file }: { slug: string; file: string }) {
+  const [Component, setComponent] = useState<ComponentType | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setComponent(null);
+    setError(null);
+    loadDynamicMockup(slug, file).then(
+      (c) => {
+        if (!cancelled) setComponent(() => c);
+      },
+      (e: unknown) => {
+        if (!cancelled) {
+          setError(
+            e instanceof Error ? e.message : "Failed to load the component",
+          );
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [slug, file]);
+
+  if (error) {
+    return (
+      <NotFound
+        title="Component could not be rendered"
+        detail={`${error} — the twin lives at mockups/${slug}/${file} in the project.`}
+      />
+    );
+  }
+  if (!Component) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
+        <p className="text-gray-500">Loading component…</p>
+      </div>
+    );
+  }
+  return <Component />;
 }
 
 // getEmbedTarget matches the board's deep-link bridge /embed/<target> and
@@ -260,12 +331,17 @@ function App() {
     return <EmbedFrame target={embedTarget} />;
   }
 
-  const previewPath = getPreviewPath();
+  const preview = getParsedPreviewPath();
 
-  if (previewPath) {
+  if (preview) {
+    if (preview.kind === "twin") {
+      return (
+        <DynamicPreview slug={preview.slug} file={preview.file} />
+      );
+    }
     return (
       <PreviewRenderer
-        componentPath={previewPath}
+        componentPath={preview.componentPath}
         modules={discoveredModules}
       />
     );

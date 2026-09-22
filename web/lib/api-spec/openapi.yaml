@@ -72,6 +72,41 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /mockup-sets/{slug}/source/{file}:
+    get:
+      operationId: getMockupSetSource
+      tags: [mockups]
+      summary: Read one manifest-listed file of a mockup set
+      description: >-
+        The raw contents of a file the set's manifest lists — in practice a
+        component twin's tsx, which the sandbox renders live. Unlisted files
+        are 404: the manifest is the contract, the directory is not readable
+        through this route.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: file
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The file's contents as text/plain
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          description: Unknown slug or a file the manifest does not list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   schemas:
     HealthStatus:
@@ -97,6 +132,9 @@ components:
           type: string
         file:
           type: string
+        component:
+          type: string
+          description: The option's React twin (tsx), when the set has one
         description:
           type: string
       required:

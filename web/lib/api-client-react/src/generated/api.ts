@@ -283,3 +283,86 @@ export function useGetMockupSet<TData = Awaited<ReturnType<typeof getMockupSet>>
 
 
 
+export const getGetMockupSetSourceUrl = (slug: string,
+    file: string,) => {
+
+
+
+
+  return `/api/mockup-sets/${slug}/source/${file}`
+}
+
+/**
+ * The raw contents of a file the set's manifest lists — in practice a component twin's tsx, which the sandbox renders live. Unlisted files are 404: the manifest is the contract, the directory is not readable through this route.
+ * @summary Read one manifest-listed file of a mockup set
+ */
+export const getMockupSetSource = async (slug: string,
+    file: string, options?: Parameters<typeof customFetch>[1]): Promise<string> => {
+
+  return customFetch<string>(getGetMockupSetSourceUrl(slug,file),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMockupSetSourceQueryKey = (slug: string,
+    file: string,) => {
+    return [
+    `/api/mockup-sets/${slug}/source/${file}`
+    ] as const;
+    }
+
+
+export const getGetMockupSetSourceQueryOptions = <TData = Awaited<ReturnType<typeof getMockupSetSource>>, TError = ErrorType<Error>>(slug: string,
+    file: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMockupSetSource>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMockupSetSourceQueryKey(slug,file);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMockupSetSource>>> = ({ signal }) => getMockupSetSource(slug,file, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: slug !== null && slug !== undefined && file !== null && file !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMockupSetSource>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetMockupSetSourceQueryResult = NonNullable<Awaited<ReturnType<typeof getMockupSetSource>>>
+export type GetMockupSetSourceQueryError = ErrorType<Error>
+
+
+/**
+ * @summary Read one manifest-listed file of a mockup set
+ */
+
+export function useGetMockupSetSource<TData = Awaited<ReturnType<typeof getMockupSetSource>>, TError = ErrorType<Error>>(
+ slug: string,
+    file: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMockupSetSource>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetMockupSetSourceQueryOptions(slug,file,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
