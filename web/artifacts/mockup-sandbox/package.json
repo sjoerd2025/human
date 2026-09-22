@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "sucrase": "^3.35.0",
     "@tanstack/react-query": "catalog:",
     "@workspace/api-client-react": "workspace:*"
   },

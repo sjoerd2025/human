@@ -10,5 +10,7 @@ export interface MockupOption {
   n: number;
   name: string;
   file: string;
+  /** The option's React twin (tsx), when the set has one */
+  component?: string;
   description?: string;
 }
