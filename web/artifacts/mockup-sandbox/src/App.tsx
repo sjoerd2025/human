@@ -1,5 +1,7 @@
 import { useEffect, useState, type ComponentType } from "react";
 
+import { useListMockupSets } from "@workspace/api-client-react";
+
 import { modules as discoveredModules } from "./.generated/mockup-components";
 
 type ModuleMap = Record<string, () => Promise<Record<string, unknown>>>;
@@ -39,7 +41,9 @@ function PreviewRenderer({
       const key = `./components/mockups/${componentPath}.tsx`;
       const loader = modules[key];
       if (!loader) {
-        setError(`No component found at ${componentPath}.tsx`);
+        setError(
+          `No component at ${componentPath}.tsx — generate it with the /human-mockups skill in the project.`,
+        );
         return;
       }
 
@@ -75,11 +79,7 @@ function PreviewRenderer({
   }, [componentPath, modules]);
 
   if (error) {
-    return (
-      <pre style={{ color: "red", padding: "2rem", fontFamily: "system-ui" }}>
-        {error}
-      </pre>
-    );
+    return <NotFound title="Preview not found" detail={error} />;
   }
 
   if (!Component) return null;
@@ -91,28 +91,129 @@ function getBasePath(): string {
   return import.meta.env.BASE_URL.replace(/\/$/, "");
 }
 
+// The /mocks/ base path is mounted only by the desktop app's embedded
+// middleware (desktop/webdist.go); every other context — vite dev, a hosted
+// preview — serves this app at "/". Copy aimed at a desktop user is wrong
+// on the web, so the empty state branches on it.
+function isDesktopEmbed(): boolean {
+  return getBasePath() !== "";
+}
+
+// NotFound is the friendly miss screen for this app's own routes: a preview
+// path with no matching component (the old screen was a raw red <pre>).
+function NotFound({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
+      <div className="text-center max-w-md">
+        <h1 className="text-xl font-semibold text-gray-900 mb-2">{title}</h1>
+        <p className="text-sm text-gray-500 mb-4 break-words">{detail}</p>
+        <a
+          className="text-sm text-blue-600 hover:underline"
+          href={getBasePath() || "/"}
+        >
+          Back to the gallery
+        </a>
+      </div>
+    </div>
+  );
+}
+
 function getPreviewExamplePath(): string {
   const basePath = getBasePath();
   return `${basePath}/preview/ComponentName`;
 }
 
 function Gallery() {
-  return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
-      <div className="text-center max-w-md">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-3">
-          Component Preview Server
-        </h1>
-        <p className="text-gray-500 mb-4">
-          This server renders individual components for the workspace canvas.
-        </p>
-        <p className="text-sm text-gray-400">
-          Access component previews at{" "}
-          <code className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">
-            {getPreviewExamplePath()}
-          </code>
-        </p>
+  // The daemon's /api surface is the source of truth (webapi.go): the same
+  // manifests the desktop board lists, newest first.
+  const { data: sets, isPending, isError, error } = useListMockupSets();
+
+  if (isPending) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
+        <p className="text-gray-500">Scanning mockup sets…</p>
       </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
+        <div className="text-center max-w-md">
+          <h1 className="text-xl font-semibold text-gray-900 mb-2">
+            Cannot reach the human daemon
+          </h1>
+          <p className="text-gray-500 mb-2">
+            This page reads mockup manifests over the daemon's /api surface on
+            127.0.0.1:19285. Start it (or the desktop app, which runs one)
+            and reload.
+          </p>
+          <p className="text-xs text-gray-400 font-mono">
+            {error instanceof Error ? error.message : String(error)}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!sets || sets.length === 0) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
+        <div className="text-center max-w-md">
+          <h1 className="text-xl font-semibold text-gray-900 mb-2">
+            No mockup sets yet
+          </h1>
+          <p className="text-gray-500 mb-4">
+            The daemon's projects hold no mockups/&lt;slug&gt;/index.json. Run
+            the /human-mockups skill in a project and the set appears here.
+          </p>
+          <p className="text-sm text-gray-400">
+            {isDesktopEmbed()
+              ? "Open the Mockups view in the desktop app once a set exists."
+              : "Component previews render at " + getPreviewExamplePath()}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-8">
+      <h1 className="text-2xl font-semibold text-gray-900 mb-1">Mockup sets</h1>
+      <p className="text-sm text-gray-500 mb-6">
+        Served from the daemon's projects · newest first
+      </p>
+      <ul className="space-y-3 max-w-2xl">
+        {sets.map((set) => (
+          <li
+            key={set.slug}
+            className="bg-white border border-gray-200 rounded-lg p-4"
+          >
+            <div className="flex items-baseline justify-between gap-4">
+              <span className="font-medium text-gray-900">
+                {set.feature || set.slug}
+              </span>
+              <span className="text-xs text-gray-400">{set.project}</span>
+            </div>
+            <p className="text-sm text-gray-500 mt-1">
+              {set.options.length} option{set.options.length === 1 ? "" : "s"} ·{" "}
+              <code className="text-xs">{set.slug}</code>
+            </p>
+            <ul className="mt-2 flex flex-wrap gap-2">
+              {set.options.map((opt) => (
+                <li key={opt.file}>
+                  <a
+                    className="text-sm text-blue-600 hover:underline"
+                    href={`/mocks/mockups/${encodeURIComponent(set.slug)}/${encodeURIComponent(opt.file)}`}
+                  >
+                    {opt.name}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
