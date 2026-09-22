@@ -205,7 +205,7 @@ function Gallery() {
                 <li key={opt.file}>
                   <a
                     className="text-sm text-blue-600 hover:underline"
-                    href={`/mocks/mockups/${encodeURIComponent(set.slug)}/${encodeURIComponent(opt.file)}`}
+                    href={`${getBasePath()}/mockups/${encodeURIComponent(set.slug)}/${encodeURIComponent(opt.file)}`}
                   >
                     {opt.name}
                   </a>

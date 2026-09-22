@@ -129,13 +129,24 @@ jobs:
           path: desktop/build/bin/
           if-no-files-found: warn
 
-      # The sandbox that the desktop app embeds at /mocks/ (desktop/webdist.go).
-      # Typecheck catches the generated-client drift that codegen can introduce;
-      # the dist guard catches a source change shipped without rebuilding the
-      # committed artifact — the pnpm-side twin of SC-3613's dist/ lesson. Runs
-      # once on Linux: pure Node work, no webview. web-dist-check REBUILDS and
-      # overwrites the artifact; a PR author commits its output (same contract as
-      # desktop-frontend-check, and for the same reason — this job is read-only).
+      # The wailsapp tag that keeps desktop/ out of ci.yml's `go list ./...`
+      # also keeps its *_test.go files from running anywhere — this is the
+      # same "green and unexecuted test file" gap SC-637's banner-clobber
+      # guard fell into at a new call site (see frontend-test above), now on
+      # the Go side (SC-3603). Placed after the upload, not merely after the
+      # build: a failing step aborts the job, so running it any earlier would
+      # withhold the artifact that is most wanted precisely when a test fails.
+      - name: Test desktop backend
+        run: go test -tags "${{ matrix.tags }}" ./desktop/...
+        working-directory: .
+
+  # The sandbox that the desktop app embeds at /mocks/ (desktop/webdist.go).
+  # Typecheck catches the generated-client drift that codegen can introduce;
+  # the dist guard catches a source change shipped without rebuilding the
+  # committed artifact — the pnpm-side twin of SC-3613's dist/ lesson. Runs
+  # once on Linux: pure Node work, no webview. web-dist-check REBUILDS and
+  # overwrites the artifact; a PR author commits its output (same contract as
+  # desktop-frontend-check, and for the same reason — this job is read-only).
   web-sandbox:
     runs-on: ubuntu-24.04
     steps:
@@ -164,14 +175,3 @@ jobs:
       # The rebuild-and-diff guard: passes only when the committed
       # desktop/web-dist matches a fresh BASE_PATH=/mocks/ build.
       - run: make web-dist-check
-
-  # The wailsapp tag that keeps desktop/ out of ci.yml's `go list ./...`
-  # also keeps its *_test.go files from running anywhere — this is the
-  # same "green and unexecuted test file" gap SC-637's banner-clobber
-  # guard fell into at a new call site (see frontend-test above), now on
-  # the Go side (SC-3603). Placed after the upload, not merely after the
-      # build: a failing step aborts the job, so running it any earlier would
-      # withhold the artifact that is most wanted precisely when a test fails.
-      - name: Test desktop backend
-        run: go test -tags "${{ matrix.tags }}" ./desktop/...
-        working-directory: .
