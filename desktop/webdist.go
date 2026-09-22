@@ -46,29 +46,7 @@ func sandboxMiddleware(next http.Handler) http.Handler {
 	fileServer := http.FileServerFS(sub)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// /api/… forwards to the daemon's HTTP surface — the sandbox's
-		// generated client fetches relative /api paths, which land on this
-		// asset server and must not be answered by the sandbox shell. Same-
-		// origin via the proxy, so no CORS story. The target is the exact
-		// address in the info file — the one this desktop's own daemon client
-		// dials — re-read per request, so a daemon restart on a new port
-		// heals itself.
-		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
-			info, ierr := daemon.ReadInfo()
-			if ierr != nil || info.Addr == "" {
-				writeAPIProxyError(w, r, "human daemon not running — start it or the desktop app")
-				return
-			}
-			target, perr := url.Parse("http://" + info.Addr)
-			if perr != nil {
-				writeAPIProxyError(w, r, "daemon address in info file is not parseable")
-				return
-			}
-			proxy := httputil.NewSingleHostReverseProxy(target)
-			proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
-				writeAPIProxyError(w, r, "daemon unreachable at "+info.Addr)
-			}
-			proxy.ServeHTTP(w, r)
+		if serveAPIProxy(w, r) {
 			return
 		}
 
@@ -125,6 +103,35 @@ func sandboxMiddleware(next http.Handler) http.Handler {
 		}
 		serveSandboxIndex(w, r, sub)
 	})
+}
+
+// serveAPIProxy forwards /api/… to the daemon's HTTP surface when the request
+// is one, reporting whether it handled the request. The sandbox's generated
+// client fetches relative /api paths, which land on this asset server and must
+// not be answered by the sandbox shell. Same-origin via the proxy, so no CORS
+// story. The target is the exact address in the info file — the one this
+// desktop's own daemon client dials — re-read per request, so a daemon restart
+// on a new port heals itself.
+func serveAPIProxy(w http.ResponseWriter, r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api" {
+		return false
+	}
+	info, ierr := daemon.ReadInfo()
+	if ierr != nil || info.Addr == "" {
+		writeAPIProxyError(w, r, "human daemon not running — start it or the desktop app")
+		return true
+	}
+	target, perr := url.Parse("http://" + info.Addr)
+	if perr != nil {
+		writeAPIProxyError(w, r, "daemon address in info file is not parseable")
+		return true
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
+		writeAPIProxyError(w, r, "daemon unreachable at "+info.Addr)
+	}
+	proxy.ServeHTTP(w, r)
+	return true
 }
 
 // writeAPIProxyError answers a /api request the proxy could not serve: JSON

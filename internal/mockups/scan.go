@@ -84,6 +84,9 @@ func ScanSets(projects []Project) (sets []Set, slugDirs map[string]string, err e
 				continue
 			}
 			setDir := filepath.Join(p.Dir, "mockups", e.Name())
+			// #nosec G304 — e.Name() is the os.ReadDir entry (no separators),
+			// p.Dir the registered project root; the same construct ScanSet
+			// reads under the same exemption.
 			data, readErr := os.ReadFile(filepath.Join(setDir, "index.json"))
 			if readErr != nil {
 				continue

@@ -151,6 +151,14 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
         working-directory: web
+      # Build BEFORE typecheck: App.tsx imports src/.generated/mockup-components,
+      # which the vite plugin writes at build/dev time and is gitignored — on a
+      # fresh checkout only a build materializes it (cubic, PR #12).
+      - run: pnpm --filter @workspace/mockup-sandbox build
+        working-directory: web
+        env:
+          BASE_PATH: /mocks/
+          PORT: "5174"
       - run: pnpm run typecheck
         working-directory: web
       # The rebuild-and-diff guard: passes only when the committed
