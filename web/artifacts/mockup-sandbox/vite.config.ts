@@ -19,6 +19,12 @@ if (Number.isNaN(port) || port <= 0) {
 
 const basePath = process.env.BASE_PATH ?? "/";
 
+// Where the daemon's /api surface lives — the same info-file address the
+// desktop's /api proxy forwards to, overridable for a dev daemon elsewhere.
+function daemonAddr(): string {
+  return process.env.HUMAN_DAEMON_ADDR ?? "http://127.0.0.1:19285";
+}
+
 export default defineConfig({
   base: basePath,
   plugins: [
@@ -53,6 +59,15 @@ export default defineConfig({
     allowedHosts: true,
     fs: {
       strict: true,
+    },
+    // The generated client fetches relative /api paths; outside the desktop
+    // app there is no asset server to proxy them, so dev mode forwards them
+    // to the daemon directly — the same surface the desktop proxies to.
+    proxy: {
+      "/api": {
+        target: daemonAddr(),
+        changeOrigin: false,
+      },
     },
   },
   preview: {

@@ -28,6 +28,7 @@ import (
 	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/costledger"
 	"github.com/gethuman-sh/human/internal/env"
+	"github.com/gethuman-sh/human/internal/mockups"
 	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/stats"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -57,6 +58,11 @@ type Server struct {
 	HookEvents      *HookEventStore    // in-memory hook event buffer; nil disables hook event tracking
 	NetworkEvents   *NetworkEventStore // in-memory ambient network activity buffer; nil disables
 	ModelOutcomes   *ModelOutcomeSink  // content-free model-call outcome buffer from the proxy boundary; nil disables
+	// WebAPIProjects overrides where the /api mockup surface (webapi.go)
+	// scans for sets; nil uses the registered projects from the info file,
+	// else the daemon's own working directory. Tests inject a temp dir so
+	// route tests never depend on the host's real daemon state.
+	WebAPIProjects func() []mockups.Project
 	// CostLedger answers per-ticket cost/time rollups for the board detail
 	// panel; nil makes the ticket-cost route return an empty (no-spend) result.
 	CostLedger *costledger.Store

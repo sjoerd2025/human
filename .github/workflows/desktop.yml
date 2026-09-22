@@ -16,11 +16,19 @@ on:
     branches: [main]
     paths:
       - "desktop/**"
+      - "web/artifacts/mockup-sandbox/**"
+      - "web/lib/api-spec/**"
+      - "web/lib/api-client-react/**"
+      - "web/lib/api-zod/**"
       - ".github/workflows/desktop.yml"
   pull_request:
     branches: [main]
     paths:
       - "desktop/**"
+      - "web/artifacts/mockup-sandbox/**"
+      - "web/lib/api-spec/**"
+      - "web/lib/api-client-react/**"
+      - "web/lib/api-zod/**"
       - ".github/workflows/desktop.yml"
 
 # One run per ref: supersede the in-progress matrix build on a new push to the
@@ -121,11 +129,47 @@ jobs:
           path: desktop/build/bin/
           if-no-files-found: warn
 
-      # The wailsapp tag that keeps desktop/ out of ci.yml's `go list ./...`
-      # also keeps its *_test.go files from running anywhere — this is the
-      # same "green and unexecuted test file" gap SC-637's banner-clobber
-      # guard fell into at a new call site (see frontend-test above), now on
-      # the Go side (SC-3603). Placed after the upload, not merely after the
+      # The sandbox that the desktop app embeds at /mocks/ (desktop/webdist.go).
+      # Typecheck catches the generated-client drift that codegen can introduce;
+      # the dist guard catches a source change shipped without rebuilding the
+      # committed artifact — the pnpm-side twin of SC-3613's dist/ lesson. Runs
+      # once on Linux: pure Node work, no webview. web-dist-check REBUILDS and
+      # overwrites the artifact; a PR author commits its output (same contract as
+      # desktop-frontend-check, and for the same reason — this job is read-only).
+  web-sandbox:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: pnpm/action-setup@v4
+        with:
+          # Version comes from web/package.json's packageManager field.
+          package_json_file: web/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      # Build BEFORE typecheck: App.tsx imports src/.generated/mockup-components,
+      # which the vite plugin writes at build/dev time and is gitignored — on a
+      # fresh checkout only a build materializes it (cubic, PR #12).
+      - run: pnpm --filter @workspace/mockup-sandbox build
+        working-directory: web
+        env:
+          BASE_PATH: /mocks/
+          PORT: "5174"
+      - run: pnpm run typecheck
+        working-directory: web
+      # The rebuild-and-diff guard: passes only when the committed
+      # desktop/web-dist matches a fresh BASE_PATH=/mocks/ build.
+      - run: make web-dist-check
+
+  # The wailsapp tag that keeps desktop/ out of ci.yml's `go list ./...`
+  # also keeps its *_test.go files from running anywhere — this is the
+  # same "green and unexecuted test file" gap SC-637's banner-clobber
+  # guard fell into at a new call site (see frontend-test above), now on
+  # the Go side (SC-3603). Placed after the upload, not merely after the
       # build: a failing step aborts the job, so running it any earlier would
       # withhold the artifact that is most wanted precisely when a test fails.
       - name: Test desktop backend

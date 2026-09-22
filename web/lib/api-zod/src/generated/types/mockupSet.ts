@@ -5,20 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-export interface HealthStatus {
-  status: string;
-}
-
-export interface Error {
-  error: string;
-}
-
-export interface MockupOption {
-  n: number;
-  name: string;
-  file: string;
-  description?: string;
-}
+import type { MockupOption } from './mockupOption';
 
 export interface MockupSet {
   feature: string;
@@ -31,9 +18,3 @@ export interface MockupSet {
   instructions?: string;
   options: MockupOption[];
 }
-
-export interface MockupSetDetail {
-  set: MockupSet;
-  dir: string;
-}
-

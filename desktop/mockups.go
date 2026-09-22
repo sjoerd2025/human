@@ -3,11 +3,9 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -71,50 +69,41 @@ func mockupRoots() []daemon.ProjectInfo {
 // manifest are skipped — the skill always writes one, and guessing at loose
 // HTML files would put unlabeled content in the viewer.
 func (a *App) MockupSets() ([]MockupSet, error) {
-	sets := []MockupSet{}
-	dirs := map[string]string{}
-	for _, p := range mockupRoots() {
-		entries, err := os.ReadDir(filepath.Join(p.Dir, "mockups"))
-		if err != nil {
-			continue
+	// The scan authority lives in internal/mockups so the daemon's /api
+	// surface (webapi.go) serves the SAME manifests the board lists — one
+	// reader, not two drifting ones. This side converts to the board's own
+	// shape and refreshes the middleware's slug→dir map.
+	scanned, dirs, err := mockups.ScanSets(toScanProjects(mockupRoots()))
+	if err != nil {
+		return nil, err
+	}
+	sets := make([]MockupSet, len(scanned))
+	for i, s := range scanned {
+		sets[i] = MockupSet{
+			Feature: s.Feature, Slug: s.Slug, Created: s.Created,
+			Project: s.Project, Ticket: s.Ticket, Parent: s.Parent,
+			ParentFile: s.ParentFile, Instructions: s.Instructions,
+			Options: make([]MockupOption, len(s.Options)),
 		}
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			// Dot-prefixed dirs hold pruned/archived subtrees (mockups/.archive/…);
-			// they must not surface in navigation.
-			if strings.HasPrefix(e.Name(), ".") {
-				continue
-			}
-			setDir := filepath.Join(p.Dir, "mockups", e.Name())
-			data, err := os.ReadFile(filepath.Join(setDir, "index.json"))
-			if err != nil {
-				continue
-			}
-			var set MockupSet
-			if json.Unmarshal(data, &set) != nil || len(set.Options) == 0 {
-				continue
-			}
-			if set.Slug == "" {
-				set.Slug = e.Name()
-			}
-			set.Project = p.Name
-			// Cross-project slug collision: first project wins. The slug is
-			// the URL key, so a duplicate cannot be served unambiguously.
-			if _, dup := dirs[set.Slug]; dup {
-				continue
-			}
-			dirs[set.Slug] = setDir
-			sets = append(sets, set)
+		for j, o := range s.Options {
+			sets[i].Options[j] = MockupOption{N: o.N, Name: o.Name, File: o.File, Description: o.Description}
 		}
 	}
-	sort.Slice(sets, func(i, j int) bool { return sets[i].Created > sets[j].Created })
-
 	mockupMu.Lock()
 	mockupDirs = dirs
 	mockupMu.Unlock()
 	return sets, nil
+}
+
+// toScanProjects converts the daemon's project info into the scan package's
+// shape (the scan package must not import internal/daemon: the daemon imports
+// it for the /api surface).
+func toScanProjects(info []daemon.ProjectInfo) []mockups.Project {
+	out := make([]mockups.Project, len(info))
+	for i, p := range info {
+		out[i] = mockups.Project{Name: p.Name, Dir: p.Dir}
+	}
+	return out
 }
 
 // cardMockupInfo is one card's link to a local mockup set: the set slug plus
@@ -164,15 +153,9 @@ func cardMockups() map[string]cardMockupInfo {
 }
 
 // validMockupSet reports whether setDir holds a manifest the mockup viewer
-// would accept — MockupSets' validity rule, factored for the card link check.
-func validMockupSet(setDir string) bool {
-	data, err := os.ReadFile(filepath.Join(setDir, "index.json")) // #nosec G304 — path derived from registered project dirs
-	if err != nil {
-		return false
-	}
-	var set MockupSet
-	return json.Unmarshal(data, &set) == nil && len(set.Options) > 0
-}
+// would accept — the shared scan package's rule, re-exported for the card
+// link check so "View mocks" never points at a set the viewer will not list.
+func validMockupSet(setDir string) bool { return mockups.ValidSet(setDir) }
 
 // mockupMiddleware serves /mockups/<slug>/<file> straight from the set
 // directories discovered by MockupSets, so the webview can iframe mockups

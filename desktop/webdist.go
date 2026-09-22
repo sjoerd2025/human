@@ -6,8 +6,12 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"path"
 	"strings"
+
+	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 // The React sandbox (web/artifacts/mockup-sandbox) is built separately from
@@ -42,6 +46,10 @@ func sandboxMiddleware(next http.Handler) http.Handler {
 	fileServer := http.FileServerFS(sub)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveAPIProxy(w, r) {
+			return
+		}
+
 		rest, ok := strings.CutPrefix(r.URL.Path, "/mocks/")
 		if !ok {
 			// "/mocks" without the trailing slash and every other path (in
@@ -95,6 +103,45 @@ func sandboxMiddleware(next http.Handler) http.Handler {
 		}
 		serveSandboxIndex(w, r, sub)
 	})
+}
+
+// serveAPIProxy forwards /api/… to the daemon's HTTP surface when the request
+// is one, reporting whether it handled the request. The sandbox's generated
+// client fetches relative /api paths, which land on this asset server and must
+// not be answered by the sandbox shell. Same-origin via the proxy, so no CORS
+// story. The target is the exact address in the info file — the one this
+// desktop's own daemon client dials — re-read per request, so a daemon restart
+// on a new port heals itself.
+func serveAPIProxy(w http.ResponseWriter, r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api" {
+		return false
+	}
+	info, ierr := daemon.ReadInfo()
+	if ierr != nil || info.Addr == "" {
+		writeAPIProxyError(w, r, "human daemon not running — start it or the desktop app")
+		return true
+	}
+	target, perr := url.Parse("http://" + info.Addr)
+	if perr != nil {
+		writeAPIProxyError(w, r, "daemon address in info file is not parseable")
+		return true
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
+		writeAPIProxyError(w, r, "daemon unreachable at "+info.Addr)
+	}
+	proxy.ServeHTTP(w, r)
+	return true
+}
+
+// writeAPIProxyError answers a /api request the proxy could not serve: JSON
+// with a named cause, never the sandbox shell — a masked-as-HTML API failure
+// is exactly the misleading feedback the old empty-state review flagged.
+func writeAPIProxyError(w http.ResponseWriter, r *http.Request, msg string) {
+	header := w.Header()
+	header.Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadGateway)
+	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
 }
 
 // serveSandboxIndex responds with the sandbox's index.html, or 404 when the

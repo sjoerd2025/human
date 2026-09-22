@@ -171,9 +171,11 @@ desktop-frontend-check: desktop-frontend
 # copied into desktop/web-dist/, which //go:embed all:web-dist binds at
 # compile time — so a stale copy ships silently frozen artifacts exactly
 # like the board's dist/ does (SC-3613). web-dist-check is the pnpm-side
-# guard: rebuild, recopy, and diff against git so drift is visible before a
-# push. Deliberately NOT part of `check` for the same reason
-# desktop-frontend-check is not: this gate runs where pnpm may not exist.
+# guard: rebuild, wipe and recopy (hashed asset names change every build — a
+# plain cp over the old tree would leave stale assets invisible to git), then
+# diff against git so drift is visible before a push. Deliberately NOT part
+# of `check` for the same reason desktop-frontend-check is not: this gate
+# runs where pnpm may not exist.
 web-install:
 	cd web && pnpm install
 
@@ -189,6 +191,7 @@ web-typecheck: web-install
 
 web-dist-check: web-install
 	cd web && BASE_PATH=/mocks/ PORT=5174 pnpm --filter @workspace/mockup-sandbox build
+	rm -rf desktop/web-dist && mkdir -p desktop/web-dist
 	cp -R web/artifacts/mockup-sandbox/dist/* desktop/web-dist/
 	git diff --exit-code -- desktop/web-dist || { \
 		echo "error: desktop/web-dist is stale — the fresh build above differs from the committed artifact."; \
