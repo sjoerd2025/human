@@ -21,8 +21,11 @@ const basePath = process.env.BASE_PATH ?? "/";
 
 // Where the daemon's /api surface lives — the same info-file address the
 // desktop's /api proxy forwards to, overridable for a dev daemon elsewhere.
+// The documented env format is schemeless (HUMAN_DAEMON_ADDR=host:port); the
+// proxy target needs a scheme, so add the default when it is missing.
 function daemonAddr(): string {
-  return process.env.HUMAN_DAEMON_ADDR ?? "http://127.0.0.1:19285";
+  const raw = process.env.HUMAN_DAEMON_ADDR ?? "127.0.0.1:19285";
+  return raw.includes("://") ? raw : `http://${raw}`;
 }
 
 export default defineConfig({
