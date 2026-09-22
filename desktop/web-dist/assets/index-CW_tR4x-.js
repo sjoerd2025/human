@@ -1,1 +1,0 @@
-import{r as t}from"./index-DjvvOTYd.js";var u=Object.defineProperty,f=(e,r)=>u(e,"name",{value:r,configurable:!0});function c(e){const r=t.useRef(e);return t.useEffect(()=>{r.current=e}),t.useMemo(()=>((...a)=>r.current?.(...a)),[])}f(c,"useCallbackRef");export{c as u};

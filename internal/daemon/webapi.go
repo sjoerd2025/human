@@ -231,6 +231,9 @@ func (s *Server) writeWebAPIText(conn net.Conn, req *http.Request, status int, c
 	if req.Method == http.MethodHead {
 		payload = nil
 	}
+	// #nosec G705 — the body is a manifest-listed project file read back to
+	// the same loopback requester that named it (self-echo, no second-party
+	// taint); every framing value is a server-side constant.
 	_, err := fmt.Fprintf(conn,
 		"HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: %s\r\n\r\n%s",
 		status, http.StatusText(status), contentType, len(b), connection, payload)
