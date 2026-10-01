@@ -100,6 +100,29 @@ make desktop-frontend-check  # the same drift check CI runs
 
 Then commit the changed `dist/` files with your source change. Never hand-edit `dist/`: it is build output, and a hand-transcribed bundle is what broke every deploy for a day (SC-3613).
 
+### The mockup sandbox embed (`web-dist/`)
+
+The Mockups view does not render mockups itself: it opens `/mocks/embed/mockups/<slug>/<file>` in an iframe, and the desktop app serves a second, separately built React app — the **mockup sandbox** (`web/artifacts/mockup-sandbox`) — from an embedded filesystem at the `/mocks/` prefix (`desktop/webdist.go`). That app resolves the deep link and frames the static set the daemon's middleware serves at `/mockups/<slug>/<file>` — a two-hop bridge (deep link → sandbox shell → disk-served set).
+
+`desktop/web-dist/` is the **checked-in build output** of that sandbox, embedded via `//go:embed`, exactly like the board's `frontend/dist/` above and guarded the same way. It must be built with `BASE_PATH=/mocks/`: a default-baked build references its assets at `/assets/…` and 404s every one of them under the mount. After editing the sandbox or anything it imports (including the generated API client):
+
+```bash
+make web-build        # BASE_PATH=/mocks/ build of the sandbox
+make web-dist-check   # rebuild, refresh desktop/web-dist/, diff against git
+```
+
+`web-dist-check` wipes and recopies `desktop/web-dist/` before diffing, because hashed asset names change every build — a plain copy over the old tree would leave stale assets invisible to git. A failing guard means the committed artifact lags the source: commit the refreshed `web-dist/` files with your source change; never weaken the guard and never hand-edit the bundle. The `web-sandbox` job in `.github/workflows/desktop.yml` runs this same check (plus `pnpm run typecheck`) on every PR touching `web/` or `desktop/`.
+
+The sandbox also mounts the daemon's HTTP surface: the embedded middleware proxies `/api/…` to the address in `~/.human/daemon.json` — the same daemon the app itself is attached to — so `GET /api/mockup-sets` (the generated Orval react-query client's data source) works same-origin inside the embed, and the gallery degrades to a named "cannot reach the daemon" state when no daemon is running. The vite dev server proxies `/api` to `127.0.0.1:19285` for the same parity in `pnpm dev`.
+
+The `/mocks/` routes, for reference:
+
+* `/mocks/` — the sandbox gallery (lists mockup sets from the daemon API)
+* `/mocks/preview/<Component>` — renders a component bundled into the sandbox itself
+* `/mocks/embed/<target>` — the board's iframe bridge (serves the shell; the shell frames `<target>`)
+* `/mocks/mockups/<slug>/<file>` — inner hop, rebased onto `/mockups/` and served from disk
+* `/api/…` — proxied to the daemon (target re-read per request, so a daemon restart on a new port heals); intercepted at the origin root by the same middleware, since the sandbox's client fetches relative paths that resolve there
+
 The check compares the committed bundle against a fresh build **after normalizing whole-line whitespace** — line endings, indentation and trailing spaces. Two builds of identical source may differ that way, and blocking a merge on it is not a real failure; anything else, including a changed string literal, still fails. Neither target is part of `make check`, which runs where npm is unavailable.
 
 ## Exiting the app

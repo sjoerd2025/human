@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"embed"
+	"net/http"
 	"time"
 
 	"github.com/gethuman-sh/human/internal/daemon"
@@ -37,10 +38,15 @@ func main() {
 		Height: 800,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
-			// Serves /mockups/<slug>/<file> from project directories on
-			// disk so the Mockups view can iframe /human-mockups output
-			// without embedding it in the binary.
-			Middleware: mockupMiddleware,
+			// Composition order is the contract (the closure is what lets
+			// two middlewares nest: Wails' default asset handler is the
+			// innermost next). sandboxMiddleware owns the embedded React
+			// sandbox at /mocks/ (webdist.go); mockupMiddleware serves the
+			// disk-based mockup sets at the distinct /mockups/ prefix. Each
+			// root passes the other through untouched.
+			Middleware: func(next http.Handler) http.Handler {
+				return sandboxMiddleware(mockupMiddleware(next))
+			},
 		},
 		OnStartup: app.startup,
 		// See closeflow.go: never blocks, decides idle/busy on a background

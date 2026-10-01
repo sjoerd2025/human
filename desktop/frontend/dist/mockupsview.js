@@ -204,7 +204,11 @@ function renderDetail() {
             controls +
             varPanel +
             childrenBlock +
-            `<iframe class="mockup-frame" src="/mockups/${encodeURIComponent(set.slug)}/${encodeURIComponent(opt.file)}" ` +
+            // The 3a bridge (combine plan): the option frame points at the embedded
+            // React shell (/mocks/, sandboxMiddleware in webdist.go), which iframes
+            // the disk-served set at /mockups/<slug>/<file>. The set files themselves
+            // stay served live from disk — nothing about generation changes.
+            `<iframe class="mockup-frame" src="/mocks/embed/mockups/${encodeURIComponent(set.slug)}/${encodeURIComponent(opt.file)}" ` +
             `title="${escapeHtml(opt.name)}"></iframe>`;
     h.querySelector(".mockup-back")?.addEventListener("click", () => {
         active = null;

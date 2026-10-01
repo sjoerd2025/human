@@ -1,0 +1,1 @@
+import{j as o}from"./index-CLPZruoJ.js";import{c as r}from"./utils-Bk382tBs.js";import{c as i}from"./createLucideIcon-oPbOo3du.js";const t=[["path",{d:"M21 12a9 9 0 1 1-6.219-8.56",key:"13zald"}]],c=i("loader-circle",t);function l({className:a,...e}){return o.jsx(c,{role:"status","aria-label":"Loading",className:r("size-4 animate-spin",a),...e})}export{l as Spinner};
